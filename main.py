@@ -8,6 +8,14 @@ from db import (
     jobs_collection
 )
 from agent import evaluate_resume
+from fastapi import FastAPI
+
+app = FastAPI()
+
+
+@app.get("/")
+async def root():
+    return {"message": "Hello World"}
 
 print("Worker started")
 
@@ -116,7 +124,7 @@ while True:
                 }
             )
 
-        # ✅ Mark report done after all applicants processed
+        
         reports_collection.update_one(
             {"_id": report_id},
             {"$set": {"status": "DONE"}}
