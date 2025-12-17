@@ -1,3 +1,4 @@
+# worker.py
 import time
 from bson import ObjectId
 from db import (
@@ -11,110 +12,123 @@ from agent import evaluate_resume
 print("Worker started")
 
 while True:
-    report = reports_collection.find_one({"status": "PENDING"})
+    # Pick one pending report
+    report = reports_collection.find_one_and_update(
+        {"status": "PENDING"},
+        {"$set": {"status": "PROCESSING"}}
+    )
+
     if not report:
         print("No pending reports")
         time.sleep(10)
+        continue
+
     report_id = report["_id"]
-    #reports_collection.find_one_and_update({"_id":report_id},{"status":"PROCESSING"})
     print("Processing Report:", report_id)
-    priority=report["priority"]
-    applicants=report["results"]
-    job_id=report["jobProfile"]
-    job=jobs_collection.find_one({"_id": job_id})
-    title=job["title"]
-    description=job["description"]
-    skillRequired=job["skillRequired"]
-    experienceRequired=job["experienceRequired"]
-    vacancies=job["vacancies"]
-    location=job["location"]
-    print("job")
-    for applicant_id in applicants:
-        applicant=applicants_collection.find_one({"_id": applicant_id})
-        #applicants_collection.find_one_and_update({"_id":applicant_id},{"status":"PROCESSING"})
-        resume_id=applicant["resume"]
-        resume=resumes_collection.find_one({"_id":resume_id})
-        print("aagaye hum")
-        extracted=resume["extracted"]
-        text=extracted["text"]
-        link=extracted["links"]
-        try:
-            print("yeha aa gaye h hum")
-            
-            response=  evaluate_resume(resume_text=text,resume_links=link,job={title,description,experienceRequired,skillRequired,location,vacancies},priority=priority)
-            print("call me baby")
-            print(response)
-            #applicants_collection.find_one_and_update({"_id":applicant_id},{"verdict":response["verdict"],"score":response["score"],"name":response["name"],"location":response["location"],"skills":response["skills"],"experience":response["experience"],"qualifications":response["qualifications"],"projects":response["projects"],"certificates":response["certificates"],"social":response["social"]})
-            exit(1)
-        except Exception as e:
-            print(e)
-    
 
+    priority = report.get("priority")
+    applicant_ids = report.get("results", [])
+    job_id = report.get("jobProfile")
 
+    job = jobs_collection.find_one({"_id": job_id})
+    if not job:
+        reports_collection.update_one(
+            {"_id": report_id},
+            {"$set": {"status": "FAILED"}}
+        )
+        continue
 
+    job_payload = {
+        "title": job.get("title", ""),
+        "description": job.get("description", ""),
+        "skillRequired": job.get("skillRequired", []),
+        "experienceRequired": job.get("experienceRequired", 0),
+        "vacancies": job.get("vacancies", 0),
+        "location": job.get("location", "")
+    }
 
-    # reports_collection.update_one(
-    #     {"_id": report_id},
-    #     {"$set": {"status": "PROCESSING"}}
-    # )
-    # applicants = list(applicants_collection.find({
-    #     "createdFor": report_id,
-    #     "status": "PENDING"
-    # }))
+    try:
+        for applicant_id in applicant_ids:
+            applicant = applicants_collection.find_one({"_id": applicant_id})
+            if not applicant:
+                continue
 
-    # if not applicants:
-    #     print("No applicants for report")
-    #     reports_collection.update_one(
-    #         {"_id": report_id},
-    #         {"$set": {"status": "DONE"}}
-    #     )
-    #     continue
+            resume_id = applicant.get("resume")
+            resume = resumes_collection.find_one({"_id": resume_id})
+            if not resume:
+                applicants_collection.update_one(
+                    {"_id": applicant_id},
+                    {
+                        "$set": {
+                            "status": "FAILED",
+                            "failureReason": "Resume not found"
+                        }
+                    }
+                )
+                continue
 
-    # job = jobs_collection.find_one({"_id": report["jobProfile"]})
+            extracted = resume.get("extracted", {})
+            text = extracted.get("text", "")
+            links = extracted.get("links", [])
 
-    # for applicant in applicants:
-    #     applicant_id = applicant["_id"]
-    #     print("Evaluating Applicant:", applicant_id)
+            # Mark applicant as processing
+            applicants_collection.update_one(
+                {"_id": applicant_id},
+                {"$set": {"status": "PROCESSING"}}
+            )
 
-    #     try:
-    #         resume = resumes_collection.find_one(
-    #             {"_id": applicant["resume"]}
-    #         )
+            response = evaluate_resume(
+                resume_text=text,
+                resume_links=links,
+                job=job_payload,
+                priority=priority
+            )
 
-    #         resume_text = resume.get("extracted", {}).get("text", "")
-    #         if not resume_text:
-    #             raise Exception("Empty resume text")
+            if not response:
+                applicants_collection.update_one(
+                    {"_id": applicant_id},
+                    {
+                        "$set": {
+                            "status": "FAILED",
+                            "failureReason": "Empty AI response"
+                        }
+                    }
+                )
+                continue
 
-    #         result = evaluate_resume(resume_text, job)
+            # ✅ Update applicant with AI response
+            applicants_collection.update_one(
+                {"_id": applicant_id},
+                {
+                    "$set": {
+                        "verdict": response.get("verdict"),
+                        "score": response.get("score"),
+                        "name": response.get("name"),
+                        "location": response.get("location"),
+                        "skills": response.get("skills", []),
+                        "experience": response.get("experience", []),
+                        "qualifications": response.get("qualifications", []),
+                        "projects": response.get("projects", []),
+                        "certificates": response.get("certificates", []),
+                        "social": response.get("social", {}),
+                        "status": "UNVERIFIED"
+                    }
+                }
+            )
 
-    #         applicants_collection.update_one(
-    #             {"_id": applicant_id},
-    #             {
-    #                 "$set": {
-    #                     "score": result["score"],
-    #                     "verdict": result["verdict"],
-    #                     "failureReason": result["reason"],
-    #                     "status": "UNVERIFIED"
-    #                 }
-    #             }
-    #         )
+        # ✅ Mark report done after all applicants processed
+        reports_collection.update_one(
+            {"_id": report_id},
+            {"$set": {"status": "DONE"}}
+        )
 
-    #     except Exception as e:
-    #         applicants_collection.update_one(
-    #             {"_id": applicant_id},
-    #             {
-    #                 "$set": {
-    #                     "status": "FAILED",
-    #                     "failureReason": str(e),
-    #                     "score": 0,
-    #                     "verdict": "REJECTED"
-    #                 }
-    #             }
-    #         )
+        print("Report completed:", report_id)
 
-    # reports_collection.update_one(
-    #     {"_id": report_id},
-    #     {"$set": {"status": "DONE"}}
-    # )
+    except Exception as e:
+        print("Worker error:", e)
 
-    # print("Report completed:", report_id)
+        # Fail report
+        reports_collection.update_one(
+            {"_id": report_id},
+            {"$set": {"status": "FAILED"}}
+        )

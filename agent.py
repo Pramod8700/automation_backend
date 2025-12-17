@@ -1,6 +1,6 @@
+# agent.py
 from google import genai
 import os
-from pymongo import MongoClient
 import json
 from dotenv import load_dotenv
 from bson import ObjectId
@@ -8,24 +8,19 @@ from bson import ObjectId
 def convert_objectid(data):
     if isinstance(data, dict):
         return {k: convert_objectid(v) for k, v in data.items()}
-    elif isinstance(data, list):
+    if isinstance(data, list):
         return [convert_objectid(i) for i in data]
-    elif isinstance(data, ObjectId):
+    if isinstance(data, ObjectId):
         return str(data)
-    else:
-        return data
+    return data
 
-
-# 🔥 Load .env file
 load_dotenv()
 
-# ---------------- CLIENT ----------------
 client = genai.Client(
     api_key=os.getenv("GOOGLE_API_KEY")
 )
 
-MODEL = "gemini-2.5-flash"
-
+MODEL = "gemini-flash-latest"
 
 SYSTEM_PROMPT = """
 You are a STRICT resume evaluation agent.
@@ -95,10 +90,7 @@ OUTPUT SCHEMA:
 }
 """
 
-# ---------------- FUNCTION ----------------
 def evaluate_resume(resume_text, resume_links, job, priority):
-    print("new jageh")
-
     payload = {
         "resumeText": resume_text,
         "resumeLinks": resume_links,
@@ -106,7 +98,7 @@ def evaluate_resume(resume_text, resume_links, job, priority):
         "priority": priority
     }
 
-    payload = convert_objectid(payload)  # 🔥 FIX HERE
+    payload = convert_objectid(payload)
 
     response = client.models.generate_content(
         model=MODEL,
